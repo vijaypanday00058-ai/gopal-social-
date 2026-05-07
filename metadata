@@ -1,0 +1,12 @@
+ota-property-files=payload_metadata.bin:5527:662474,payload.bin:5527:1251623850,payload_properties.txt:1251629435:156,apex_info.pb:3096:1541,care_map.pb:4684:796,metadata:69:798,metadata.pb:935:2113                        
+ota-required-cache=0
+ota-streaming-property-files=payload.bin:5527:1251623850,payload_properties.txt:1251629435:156,apex_info.pb:3096:1541,care_map.pb:4684:796,metadata:69:798,metadata.pb:935:2113                          
+ota-type=AB
+post-build=Redmi/sky/sky:15/AQ3A.240912.001/OS2.0.201.0.VMWINXM:user/release-keys
+post-build-incremental=OS2.0.201.0.VMWINXM
+post-sdk-level=35
+post-security-patch-level=2025-08-01
+post-timestamp=1757041163
+pre-build=Redmi/sky/sky:15/AQ3A.240912.001/OS2.0.9.0.VMWINXM:user/release-keys
+pre-build-incremental=OS2.0.9.0.VMWINXM
+pre-device=sky

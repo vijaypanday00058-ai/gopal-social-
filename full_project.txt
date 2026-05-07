@@ -1,0 +1,1486 @@
+// ================================================================
+// FILE: src/main.tsx
+// ================================================================
+import { createRoot } from "react-dom/client";
+import App from "./App";
+import "./index.css";
+
+createRoot(document.getElementById("root")!).render(<App />);
+
+
+// ================================================================
+// FILE: src/App.tsx
+// ================================================================
+import { Switch, Route, Router as WouterRouter, useLocation, Redirect } from "wouter";
+import { ClerkProvider, SignIn, SignUp, Show, useClerk } from "@clerk/react";
+import { publishableKeyFromHost } from "@clerk/react/internal";
+import { shadcn } from "@clerk/themes";
+import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
+import { Toaster } from "@/components/ui/toaster";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useEffect, useRef } from "react";
+import NotFound from "@/pages/not-found";
+
+import Home from "@/pages/home";
+import Feed from "@/pages/feed";
+import Explore from "@/pages/explore";
+import Profile from "@/pages/profile";
+import UserProfile from "@/pages/user-profile";
+import Messages from "@/pages/messages";
+import Chat from "@/pages/chat";
+
+const clerkPubKey = publishableKeyFromHost(
+  window.location.hostname,
+  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+);
+
+const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+function stripBase(path: string): string {
+  return basePath && path.startsWith(basePath)
+    ? path.slice(basePath.length) || "/"
+    : path;
+}
+
+if (!clerkPubKey) {
+  throw new Error("Missing VITE_CLERK_PUBLISHABLE_KEY in .env file");
+}
+
+const clerkAppearance = {
+  theme: shadcn,
+  cssLayerName: "clerk",
+  options: {
+    logoPlacement: "inside" as const,
+    logoLinkUrl: basePath || "/",
+    logoImageUrl: `${window.location.origin}${basePath}/logo.svg`,
+  },
+  variables: {
+    colorPrimary: "hsl(341, 76%, 54%)",
+    colorForeground: "hsl(0, 0%, 5%)",
+    colorMutedForeground: "hsl(0, 0%, 45%)",
+    colorBackground: "hsl(0, 0%, 100%)",
+    colorInput: "hsl(0, 0%, 98%)",
+    colorInputForeground: "hsl(0, 0%, 5%)",
+    colorDanger: "hsl(0, 84%, 60%)",
+    colorNeutral: "hsl(0, 0%, 90%)",
+    fontFamily: "Outfit, sans-serif",
+    borderRadius: "0.75rem",
+  },
+  elements: {
+    rootBox: "w-full flex justify-center",
+    cardBox: "bg-white dark:bg-[#121212] rounded-2xl w-[440px] max-w-full overflow-hidden shadow-2xl",
+    card: "!shadow-none !border-0 !bg-transparent !rounded-none",
+    footer: "!shadow-none !border-0 !bg-transparent !rounded-none",
+    headerTitle: "text-2xl font-bold tracking-tight text-foreground",
+    headerSubtitle: "text-muted-foreground",
+    socialButtonsBlockButtonText: "text-sm font-medium",
+    formFieldLabel: "text-sm font-medium text-foreground",
+    footerActionLink: "text-primary hover:text-primary/90 font-medium",
+    footerActionText: "text-muted-foreground",
+    dividerText: "text-muted-foreground text-xs font-medium uppercase",
+    identityPreviewEditButton: "text-primary hover:text-primary/90",
+    formFieldSuccessText: "text-emerald-600 text-sm",
+    alertText: "text-sm font-medium",
+    logoBox: "h-12 flex justify-center mb-6",
+    logoImage: "h-full w-auto",
+    socialButtonsBlockButton: "bg-background border border-border hover:bg-muted/50 rounded-lg h-11",
+    formButtonPrimary: "bg-gradient-to-r from-[#405de6] via-[#c13584] to-[#fd1d1d] hover:opacity-90 text-white font-semibold rounded-lg h-11 shadow-md transition-all",
+    formFieldInput: "bg-background border-border text-foreground rounded-lg h-11 px-4 focus:ring-2 focus:ring-primary/20 focus:border-primary",
+    footerAction: "flex items-center justify-center space-x-2 text-sm",
+    dividerLine: "bg-border h-px",
+    alert: "bg-destructive/10 border-destructive/20 rounded-lg p-4",
+    otpCodeFieldInput: "border-border rounded-lg h-12 w-12 text-lg focus:ring-2 focus:ring-primary/20",
+    formFieldRow: "space-y-2",
+    main: "p-8 space-y-6",
+  },
+};
+
+function SignInPage() {
+  return (
+    <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8 sm:px-6 lg:px-8">
+      <div className="absolute inset-0 z-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/20 via-background to-background pointer-events-none" />
+      <div className="z-10 w-full max-w-md">
+        <SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} />
+      </div>
+    </div>
+  );
+}
+
+function SignUpPage() {
+  return (
+    <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8 sm:px-6 lg:px-8">
+      <div className="absolute inset-0 z-0 bg-[radial-gradient(ellipse_at_top_left,_var(--tw-gradient-stops))] from-primary/20 via-background to-background pointer-events-none" />
+      <div className="z-10 w-full max-w-md">
+        <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} />
+      </div>
+    </div>
+  );
+}
+
+function ClerkQueryClientCacheInvalidator() {
+  const { addListener } = useClerk();
+  const queryClient = useQueryClient();
+  const prevUserIdRef = useRef<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    const unsubscribe = addListener(({ user }) => {
+      const userId = user?.id ?? null;
+      if (
+        prevUserIdRef.current !== undefined &&
+        prevUserIdRef.current !== userId
+      ) {
+        queryClient.clear();
+      }
+      prevUserIdRef.current = userId;
+    });
+    return unsubscribe;
+  }, [addListener, queryClient]);
+
+  return null;
+}
+
+function ClerkProviderWithRoutes() {
+  const [, setLocation] = useLocation();
+
+  return (
+    <ClerkProvider
+      publishableKey={clerkPubKey}
+      proxyUrl={clerkProxyUrl}
+      appearance={clerkAppearance}
+      signInUrl={`${basePath}/sign-in`}
+      signUpUrl={`${basePath}/sign-up`}
+      localization={{
+        signIn: {
+          start: {
+            title: "Welcome to GOPAL SOCIAL",
+            subtitle: "Sign in to connect with the world",
+          },
+        },
+        signUp: {
+          start: {
+            title: "Join GOPAL SOCIAL",
+            subtitle: "A new way to connect with the world",
+          },
+        },
+      }}
+      routerPush={(to) => setLocation(stripBase(to))}
+      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
+    >
+      <QueryClientProvider client={queryClient}>
+        <ClerkQueryClientCacheInvalidator />
+        <Switch>
+          <Route path="/" component={Home} />
+          <Route path="/sign-in/*?" component={SignInPage} />
+          <Route path="/sign-up/*?" component={SignUpPage} />
+          <Route path="/feed" component={Feed} />
+          <Route path="/explore" component={Explore} />
+          <Route path="/profile" component={Profile} />
+          <Route path="/profile/:clerkId" component={UserProfile} />
+          <Route path="/messages" component={Messages} />
+          <Route path="/messages/:id" component={Chat} />
+          <Route component={NotFound} />
+        </Switch>
+      </QueryClientProvider>
+    </ClerkProvider>
+  );
+}
+
+function App() {
+  return (
+    <TooltipProvider>
+      <WouterRouter base={basePath}>
+        <ClerkProviderWithRoutes />
+      </WouterRouter>
+      <Toaster />
+    </TooltipProvider>
+  );
+}
+
+export default App;
+
+
+// ================================================================
+// FILE: src/pages/home.tsx
+// ================================================================
+import { Link } from "wouter";
+import { useUser } from "@clerk/react";
+import { Redirect } from "wouter";
+import { motion } from "framer-motion";
+
+export default function Home() {
+  const { isSignedIn, isLoaded } = useUser();
+
+  if (isLoaded && isSignedIn) {
+    return <Redirect to="/feed" />;
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center relative overflow-hidden">
+      <div
+        className="absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(135deg, #405de6 0%, #5851db 20%, #833ab4 40%, #c13584 60%, #e1306c 80%, #fd1d1d 100%)",
+        }}
+      />
+      <motion.div
+        className="absolute w-96 h-96 rounded-full opacity-20 blur-3xl"
+        style={{ background: "#fd1d1d", top: "10%", right: "5%" }}
+        animate={{ scale: [1, 1.2, 1], rotate: [0, 90, 0] }}
+        transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+      />
+      <motion.div
+        className="absolute w-96 h-96 rounded-full opacity-20 blur-3xl"
+        style={{ background: "#405de6", bottom: "10%", left: "5%" }}
+        animate={{ scale: [1.2, 1, 1.2], rotate: [0, -90, 0] }}
+        transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
+      />
+
+      <div className="relative z-10 flex flex-col items-center text-center px-6">
+        <motion.div
+          className="w-24 h-24 rounded-full border-4 border-white/80 shadow-2xl mb-6 overflow-hidden flex items-center justify-center"
+          style={{ background: "rgba(255,255,255,0.2)" }}
+          whileHover={{ scale: 1.05 }}
+          transition={{ type: "spring", stiffness: 300 }}
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+        >
+          <span className="text-4xl font-black" style={{ color: "white" }}>G</span>
+        </motion.div>
+
+        <motion.h1
+          className="text-5xl sm:text-7xl font-black tracking-tight mb-4 drop-shadow-lg"
+          style={{ color: "white" }}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15, duration: 0.6 }}
+        >
+          GOPAL SOCIAL
+        </motion.h1>
+
+        <motion.p
+          className="text-xl sm:text-2xl font-medium mb-10 tracking-wide"
+          style={{ color: "rgba(255,255,255,0.9)" }}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3, duration: 0.6 }}
+        >
+          दुनिया से जुड़ने का नया तरीका
+        </motion.p>
+
+        <motion.div
+          className="flex flex-col sm:flex-row gap-4 w-full max-w-xs"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.45, duration: 0.6 }}
+        >
+          <Link href="/sign-up" className="flex-1">
+            <button
+              className="w-full font-black text-base rounded-2xl py-4 shadow-2xl transition-all hover:scale-[1.03] active:scale-[0.97]"
+              style={{ background: "white", color: "#833ab4", border: "none", cursor: "pointer" }}
+            >
+              शुरू करें — Join Free
+            </button>
+          </Link>
+          <Link href="/sign-in" className="flex-1">
+            <button
+              className="w-full font-bold text-base rounded-2xl py-4 transition-all hover:scale-[1.03] active:scale-[0.97]"
+              style={{
+                background: "rgba(255,255,255,0.15)",
+                color: "white",
+                border: "2px solid rgba(255,255,255,0.7)",
+                cursor: "pointer",
+                backdropFilter: "blur(8px)",
+              }}
+            >
+              Sign In
+            </button>
+          </Link>
+        </motion.div>
+
+        <motion.div
+          className="flex gap-8 mt-12 text-sm"
+          style={{ color: "rgba(255,255,255,0.75)" }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.7, duration: 0.6 }}
+        >
+          {["Share Posts", "Follow Friends", "Explore Trends"].map((f) => (
+            <div key={f} className="flex flex-col items-center gap-2">
+              <div className="w-2 h-2 rounded-full" style={{ background: "rgba(255,255,255,0.6)" }} />
+              <span className="font-semibold">{f}</span>
+            </div>
+          ))}
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+
+
+// ================================================================
+// FILE: src/pages/feed.tsx
+// ================================================================
+import { Show } from "@clerk/react";
+import { Redirect } from "wouter";
+import { motion, AnimatePresence } from "framer-motion";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Layout } from "@/components/layout";
+import { PostCard } from "@/components/post-card";
+import { CreatePost } from "@/components/create-post";
+import { useListPosts } from "@workspace/api-client-react";
+
+function FeedSkeleton() {
+  return (
+    <div className="space-y-4 p-4">
+      {[1, 2, 3].map((i) => (
+        <div key={i} className="flex gap-3">
+          <Skeleton className="w-10 h-10 rounded-full flex-shrink-0" />
+          <div className="flex-1 space-y-2">
+            <Skeleton className="h-4 w-32" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-3/4" />
+            <Skeleton className="h-8 w-24 mt-3" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FeedContent() {
+  const { data: posts, isLoading } = useListPosts();
+
+  return (
+    <Layout>
+      <div className="divide-y divide-border">
+        <div className="sticky top-0 md:top-0 z-30 bg-background/80 backdrop-blur-xl border-b border-border px-4 py-3 flex items-center">
+          <h2 className="text-xl font-bold text-foreground">Feed</h2>
+        </div>
+        <CreatePost />
+        {isLoading ? (
+          <FeedSkeleton />
+        ) : !posts || posts.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center px-4">
+            <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+              <span className="text-2xl">📝</span>
+            </div>
+            <h3 className="text-lg font-semibold text-foreground mb-2">No posts yet</h3>
+            <p className="text-muted-foreground">Be the first to share something with the world!</p>
+          </div>
+        ) : (
+          <AnimatePresence mode="popLayout">
+            {posts.map((post, index) => (
+              <motion.div
+                key={post.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.05, duration: 0.3 }}
+              >
+                <PostCard post={post} />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        )}
+      </div>
+    </Layout>
+  );
+}
+
+export default function Feed() {
+  return (
+    <>
+      <Show when="signed-out">
+        <Redirect to="/" />
+      </Show>
+      <Show when="signed-in">
+        <FeedContent />
+      </Show>
+    </>
+  );
+}
+
+
+// ================================================================
+// FILE: src/pages/explore.tsx
+// ================================================================
+import { Show } from "@clerk/react";
+import { Redirect } from "wouter";
+import { motion, AnimatePresence } from "framer-motion";
+import { TrendingUp } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Layout } from "@/components/layout";
+import { PostCard } from "@/components/post-card";
+import { useGetExplorePosts } from "@workspace/api-client-react";
+
+function ExploreContent() {
+  const { data: posts, isLoading } = useGetExplorePosts();
+
+  return (
+    <Layout>
+      <div>
+        <div className="sticky top-0 md:top-0 z-30 bg-background/80 backdrop-blur-xl border-b border-border px-4 py-3 flex items-center gap-3">
+          <TrendingUp className="w-5 h-5 text-primary" />
+          <h2 className="text-xl font-bold text-foreground">Explore</h2>
+        </div>
+        <div className="px-4 py-3 border-b border-border">
+          <p className="text-sm text-muted-foreground">Trending posts from the community</p>
+        </div>
+        {isLoading ? (
+          <div className="space-y-4 p-4">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="flex gap-3">
+                <Skeleton className="w-10 h-10 rounded-full flex-shrink-0" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-2/3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : !posts || posts.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center px-4">
+            <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+              <TrendingUp className="w-8 h-8 text-primary" />
+            </div>
+            <h3 className="text-lg font-semibold text-foreground mb-2">Nothing trending yet</h3>
+            <p className="text-muted-foreground">Start posting and liking to see trending content here.</p>
+          </div>
+        ) : (
+          <AnimatePresence mode="popLayout">
+            {posts.map((post, index) => (
+              <motion.div
+                key={post.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.05, duration: 0.3 }}
+              >
+                <PostCard post={post} />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        )}
+      </div>
+    </Layout>
+  );
+}
+
+export default function Explore() {
+  return (
+    <>
+      <Show when="signed-out">
+        <Redirect to="/" />
+      </Show>
+      <Show when="signed-in">
+        <ExploreContent />
+      </Show>
+    </>
+  );
+}
+
+
+// ================================================================
+// FILE: src/pages/profile.tsx
+// ================================================================
+import { useState } from "react";
+import { Show, useUser } from "@clerk/react";
+import { Redirect } from "wouter";
+import { motion } from "framer-motion";
+import { Settings, Grid, Loader2 } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Layout } from "@/components/layout";
+import { PostCard } from "@/components/post-card";
+import {
+  useGetMyProfile,
+  useListPosts,
+  useGetFeedStats,
+  useUpdateMyProfile,
+  getGetMyProfileQueryKey,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+
+function ProfileContent() {
+  const { user } = useUser();
+  const queryClient = useQueryClient();
+  const [editOpen, setEditOpen] = useState(false);
+  const [displayName, setDisplayName] = useState("");
+  const [bio, setBio] = useState("");
+
+  const { data: profile, isLoading: profileLoading } = useGetMyProfile();
+  const { data: posts, isLoading: postsLoading } = useListPosts(
+    { userId: user?.id },
+    { query: { enabled: !!user?.id } }
+  );
+  const { data: stats } = useGetFeedStats();
+  const updateProfile = useUpdateMyProfile();
+
+  const handleEditOpen = () => {
+    setDisplayName(profile?.displayName || "");
+    setBio(profile?.bio || "");
+    setEditOpen(true);
+  };
+
+  const handleSave = () => {
+    updateProfile.mutate(
+      { data: { displayName, bio } },
+      {
+        onSuccess: () => {
+          toast.success("Profile updated!");
+          queryClient.invalidateQueries({ queryKey: getGetMyProfileQueryKey() });
+          setEditOpen(false);
+        },
+        onError: () => toast.error("Failed to update profile"),
+      }
+    );
+  };
+
+  return (
+    <Layout>
+      <div>
+        <div className="sticky top-0 md:top-0 z-30 bg-background/80 backdrop-blur-xl border-b border-border px-4 py-3 flex items-center justify-between">
+          <h2 className="text-xl font-bold text-foreground">My Profile</h2>
+          <Button variant="ghost" size="icon" className="rounded-full" onClick={handleEditOpen}>
+            <Settings className="w-5 h-5 text-muted-foreground" />
+          </Button>
+        </div>
+
+        <div className="p-6 border-b border-border">
+          {profileLoading ? (
+            <div className="flex items-start gap-4">
+              <Skeleton className="w-20 h-20 rounded-full" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-6 w-40" />
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-4 w-full" />
+              </div>
+            </div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-start gap-4"
+            >
+              <Avatar className="w-20 h-20 border-2 border-primary/30 shadow-lg">
+                <AvatarImage src={user?.imageUrl} />
+                <AvatarFallback className="text-2xl bg-primary/10 text-primary">
+                  {profile?.displayName?.[0] || user?.firstName?.[0] || 'U'}
+                </AvatarFallback>
+              </Avatar>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-foreground">
+                  {profile?.displayName || user?.fullName || 'User'}
+                </h3>
+                <p className="text-muted-foreground text-sm mb-2">
+                  @{profile?.username || user?.username || 'user'}
+                </p>
+                {profile?.bio && (
+                  <p className="text-foreground/80 text-sm leading-relaxed">{profile.bio}</p>
+                )}
+                <div className="flex gap-6 mt-4">
+                  {[
+                    { label: "Posts", value: stats?.totalPosts ?? profile?.postsCount ?? 0 },
+                    { label: "Followers", value: profile?.followersCount ?? 0 },
+                    { label: "Following", value: profile?.followingCount ?? 0 },
+                  ].map((stat) => (
+                    <div key={stat.label} className="text-center">
+                      <p className="text-lg font-bold text-foreground">{stat.value}</p>
+                      <p className="text-xs text-muted-foreground">{stat.label}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          <Button
+            onClick={handleEditOpen}
+            variant="outline"
+            className="mt-4 w-full rounded-xl font-semibold hover:bg-primary/5 hover:border-primary/30 transition-all"
+          >
+            Edit Profile
+          </Button>
+        </div>
+
+        <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+          <Grid className="w-4 h-4 text-muted-foreground" />
+          <span className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Posts</span>
+        </div>
+
+        {postsLoading ? (
+          <div className="space-y-4 p-4">
+            {[1, 2].map((i) => (
+              <Skeleton key={i} className="h-24 rounded-xl" />
+            ))}
+          </div>
+        ) : !posts || posts.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center px-4">
+            <div className="w-14 h-14 rounded-full bg-muted flex items-center justify-center mb-4">
+              <Grid className="w-6 h-6 text-muted-foreground" />
+            </div>
+            <p className="text-muted-foreground">No posts yet. Share your first post!</p>
+          </div>
+        ) : (
+          posts.map((post) => <PostCard key={post.id} post={post} />)
+        )}
+      </div>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit Profile</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2">
+              <Label htmlFor="displayName">Display Name</Label>
+              <Input
+                id="displayName"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Your name"
+                className="rounded-xl"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="bio">Bio</Label>
+              <Textarea
+                id="bio"
+                value={bio}
+                onChange={(e) => setBio(e.target.value)}
+                placeholder="Tell the world about yourself..."
+                className="rounded-xl resize-none"
+                rows={3}
+              />
+            </div>
+            <Button
+              onClick={handleSave}
+              disabled={updateProfile.isPending}
+              className="w-full rounded-xl bg-gradient-to-r from-[#405de6] via-[#c13584] to-[#fd1d1d] text-white font-semibold"
+            >
+              {updateProfile.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save Changes"
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </Layout>
+  );
+}
+
+export default function Profile() {
+  return (
+    <>
+      <Show when="signed-out">
+        <Redirect to="/" />
+      </Show>
+      <Show when="signed-in">
+        <ProfileContent />
+      </Show>
+    </>
+  );
+}
+
+
+// ================================================================
+// FILE: src/pages/user-profile.tsx
+// ================================================================
+import { useState } from "react";
+import { Show } from "@clerk/react";
+import { useUser } from "@clerk/react";
+import { Link, useLocation } from "wouter";
+import { motion } from "framer-motion";
+import { ArrowLeft, Loader2, MessageCircle, Phone, Video } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Layout } from "@/components/layout";
+import { PostCard } from "@/components/post-card";
+import { CallOverlay } from "@/components/call-overlay";
+import {
+  useGetUserProfile,
+  useListPosts,
+  useToggleFollow,
+  getGetUserProfileQueryKey,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { startConversation } from "@/lib/api";
+
+interface UserProfileContentProps {
+  clerkId: string;
+}
+
+function UserProfileContent({ clerkId }: UserProfileContentProps) {
+  const { user: currentUser } = useUser();
+  const queryClient = useQueryClient();
+  const [, navigate] = useLocation();
+  const [callMode, setCallMode] = useState<"video" | "audio" | null>(null);
+  const [startingChat, setStartingChat] = useState(false);
+
+  const { data: profile, isLoading: profileLoading } = useGetUserProfile(clerkId, {
+    query: { enabled: !!clerkId, queryKey: getGetUserProfileQueryKey(clerkId) }
+  });
+  const { data: posts, isLoading: postsLoading } = useListPosts(
+    { userId: clerkId },
+    { query: { enabled: !!clerkId } }
+  );
+  const toggleFollow = useToggleFollow();
+
+  const isOwnProfile = currentUser?.id === clerkId;
+
+  const handleFollow = () => {
+    toggleFollow.mutate({ clerkId }, {
+      onSuccess: (result) => {
+        toast.success(result.following ? "Following!" : "Unfollowed");
+        queryClient.invalidateQueries({ queryKey: getGetUserProfileQueryKey(clerkId) });
+      },
+      onError: () => toast.error("Failed to update follow status"),
+    });
+  };
+
+  const handleMessage = async () => {
+    setStartingChat(true);
+    try {
+      const conv = await startConversation(clerkId);
+      navigate(`/messages/${conv.id}`);
+    } catch {
+      toast.error("Failed to open chat");
+    } finally {
+      setStartingChat(false);
+    }
+  };
+
+  const roomId = `gopal-call-${[currentUser?.id, clerkId].sort().join("-")}`;
+
+  return (
+    <Layout>
+      {callMode && currentUser && (
+        <CallOverlay
+          roomId={roomId}
+          userId={currentUser.id}
+          userName={currentUser.fullName ?? "User"}
+          mode={callMode}
+          onEnd={() => setCallMode(null)}
+        />
+      )}
+
+      <div>
+        <div className="sticky top-0 md:top-0 z-30 bg-background/80 backdrop-blur-xl border-b border-border px-4 py-3 flex items-center gap-3">
+          <Link href="/feed">
+            <Button variant="ghost" size="icon" className="rounded-full">
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+          </Link>
+          <h2 className="text-xl font-bold text-foreground flex-1">
+            {profileLoading ? <Skeleton className="h-6 w-32" /> : profile?.displayName || "Profile"}
+          </h2>
+          {!isOwnProfile && !profileLoading && (
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full text-primary hover:bg-primary/10"
+                onClick={() => setCallMode("audio")}
+                title="Voice call"
+              >
+                <Phone className="w-5 h-5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full text-primary hover:bg-primary/10"
+                onClick={() => setCallMode("video")}
+                title="Video call"
+              >
+                <Video className="w-5 h-5" />
+              </Button>
+            </div>
+          )}
+        </div>
+
+        <div className="p-6 border-b border-border">
+          {profileLoading ? (
+            <div className="flex items-start gap-4">
+              <Skeleton className="w-20 h-20 rounded-full" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-6 w-40" />
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-4 w-full" />
+              </div>
+            </div>
+          ) : profile ? (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-start gap-4"
+            >
+              <Avatar className="w-20 h-20 border-2 border-primary/30 shadow-lg">
+                <AvatarImage src={profile.avatarUrl || undefined} />
+                <AvatarFallback className="text-2xl bg-primary/10 text-primary">
+                  {profile.displayName?.[0] || 'U'}
+                </AvatarFallback>
+              </Avatar>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-foreground">{profile.displayName}</h3>
+                <p className="text-muted-foreground text-sm mb-2">@{profile.username}</p>
+                {profile.bio && (
+                  <p className="text-foreground/80 text-sm leading-relaxed">{profile.bio}</p>
+                )}
+                <div className="flex gap-6 mt-4">
+                  {[
+                    { label: "Posts", value: profile.postsCount },
+                    { label: "Followers", value: profile.followersCount },
+                    { label: "Following", value: profile.followingCount },
+                  ].map((stat) => (
+                    <div key={stat.label} className="text-center">
+                      <p className="text-lg font-bold text-foreground">{stat.value}</p>
+                      <p className="text-xs text-muted-foreground">{stat.label}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          ) : null}
+
+          {!isOwnProfile && profile && (
+            <Show when="signed-in">
+              <div className="mt-4 flex gap-3">
+                <Button
+                  onClick={handleFollow}
+                  disabled={toggleFollow.isPending}
+                  className={`flex-1 rounded-xl font-semibold transition-all ${
+                    profile.isFollowing
+                      ? "border border-border bg-transparent text-foreground hover:bg-destructive/10 hover:border-destructive hover:text-destructive"
+                      : "bg-gradient-to-r from-[#405de6] via-[#c13584] to-[#fd1d1d] text-white"
+                  }`}
+                >
+                  {toggleFollow.isPending ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : profile.isFollowing ? (
+                    "Unfollow"
+                  ) : (
+                    "Follow"
+                  )}
+                </Button>
+
+                <Button
+                  onClick={handleMessage}
+                  disabled={startingChat}
+                  variant="outline"
+                  className="flex-1 rounded-xl font-semibold hover:bg-primary/5 hover:border-primary/30 gap-2"
+                >
+                  {startingChat ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <MessageCircle className="w-4 h-4" />
+                      Message
+                    </>
+                  )}
+                </Button>
+              </div>
+
+              <div className="mt-3 flex gap-3">
+                <Button
+                  variant="outline"
+                  className="flex-1 rounded-xl gap-2 text-primary border-primary/30 hover:bg-primary/5"
+                  onClick={() => setCallMode("audio")}
+                >
+                  <Phone className="w-4 h-4" />
+                  Voice Call
+                </Button>
+                <Button
+                  variant="outline"
+                  className="flex-1 rounded-xl gap-2 text-primary border-primary/30 hover:bg-primary/5"
+                  onClick={() => setCallMode("video")}
+                >
+                  <Video className="w-4 h-4" />
+                  Video Call
+                </Button>
+              </div>
+            </Show>
+          )}
+        </div>
+
+        {postsLoading ? (
+          <div className="space-y-4 p-4">
+            {[1, 2].map((i) => (
+              <Skeleton key={i} className="h-24 rounded-xl" />
+            ))}
+          </div>
+        ) : !posts || posts.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center px-4">
+            <p className="text-muted-foreground">No posts yet.</p>
+          </div>
+        ) : (
+          posts.map((post) => <PostCard key={post.id} post={post} />)
+        )}
+      </div>
+    </Layout>
+  );
+}
+
+interface Props {
+  params: { clerkId: string };
+}
+
+export default function UserProfile({ params }: Props) {
+  return (
+    <>
+      <Show when="signed-out">
+        <UserProfileContent clerkId={params.clerkId} />
+      </Show>
+      <Show when="signed-in">
+        <UserProfileContent clerkId={params.clerkId} />
+      </Show>
+    </>
+  );
+}
+
+
+// ================================================================
+// FILE: src/pages/messages.tsx
+// ================================================================
+import { useEffect, useState } from "react";
+import { Show } from "@clerk/react";
+import { useUser } from "@clerk/react";
+import { Link, Redirect } from "wouter";
+import { motion, AnimatePresence } from "framer-motion";
+import { MessageCircle, Search, Loader2 } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Layout } from "@/components/layout";
+import { getConversations, type Conversation } from "@/lib/api";
+import { formatDistanceToNow } from "date-fns";
+
+function MessagesContent() {
+  const { user } = useUser();
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    getConversations()
+      .then(setConversations)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = conversations.filter(c =>
+    c.otherUser?.displayName.toLowerCase().includes(search.toLowerCase()) ||
+    c.otherUser?.username.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <Layout>
+      <div>
+        <div className="sticky top-0 md:top-0 z-30 bg-background/80 backdrop-blur-xl border-b border-border px-4 py-3">
+          <h2 className="text-xl font-bold text-foreground mb-3">Messages</h2>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Search conversations..."
+              className="pl-9 rounded-xl bg-muted/50 border-0"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="p-4 space-y-4">
+            {[1, 2, 3].map(i => (
+              <div key={i} className="flex items-center gap-3">
+                <Skeleton className="w-12 h-12 rounded-full" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-3 w-48" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center px-4">
+            <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+              <MessageCircle className="w-8 h-8 text-primary" />
+            </div>
+            <h3 className="text-lg font-semibold mb-2">No messages yet</h3>
+            <p className="text-muted-foreground text-sm">
+              Go to someone's profile and tap "Message" to start chatting
+            </p>
+          </div>
+        ) : (
+          <AnimatePresence>
+            {filtered.map((conv, i) => (
+              <motion.div
+                key={conv.id}
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: i * 0.05 }}
+              >
+                <Link href={`/messages/${conv.id}`}>
+                  <div className="flex items-center gap-3 px-4 py-4 hover:bg-muted/40 transition-colors cursor-pointer border-b border-border">
+                    <Avatar className="w-12 h-12 border border-border">
+                      <AvatarImage src={conv.otherUser?.avatarUrl || undefined} />
+                      <AvatarFallback className="bg-primary/10 text-primary font-semibold">
+                        {conv.otherUser?.displayName?.[0] || "U"}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="font-semibold text-sm text-foreground">
+                          {conv.otherUser?.displayName || "Unknown"}
+                        </p>
+                        {conv.lastMessage && (
+                          <span className="text-xs text-muted-foreground">
+                            {formatDistanceToNow(new Date(conv.lastMessage.createdAt), { addSuffix: true })}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm text-muted-foreground truncate">
+                        {conv.lastMessage
+                          ? conv.lastMessage.type === "voice"
+                            ? "🎤 Voice message"
+                            : conv.lastMessage.content
+                          : "No messages yet"}
+                      </p>
+                    </div>
+                  </div>
+                </Link>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        )}
+      </div>
+    </Layout>
+  );
+}
+
+export default function Messages() {
+  return (
+    <>
+      <Show when="signed-out">
+        <Redirect to="/" />
+      </Show>
+      <Show when="signed-in">
+        <MessagesContent />
+      </Show>
+    </>
+  );
+}
+
+
+// ================================================================
+// FILE: src/pages/chat.tsx
+// ================================================================
+import { useEffect, useRef, useState, useCallback } from "react";
+import { Show } from "@clerk/react";
+import { useUser } from "@clerk/react";
+import { Link, Redirect } from "wouter";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  ArrowLeft,
+  Send,
+  Mic,
+  MicOff,
+  Video,
+  Phone,
+  Square,
+  Loader2,
+} from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "sonner";
+import {
+  getMessages,
+  sendMessage,
+  type Conversation,
+  type ConversationMessage,
+  getConversations,
+} from "@/lib/api";
+import { CallOverlay } from "@/components/call-overlay";
+import { cn } from "@/lib/utils";
+import { formatDistanceToNow } from "date-fns";
+
+interface Props {
+  params: { id: string };
+}
+
+function ChatContent({ convId }: { convId: number }) {
+  const { user } = useUser();
+  const [conv, setConv] = useState<Conversation | null>(null);
+  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [callMode, setCallMode] = useState<"video" | "audio" | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const loadData = useCallback(async () => {
+    try {
+      const [convs, msgs] = await Promise.all([
+        getConversations(),
+        getMessages(convId),
+      ]);
+      const c = convs.find((c) => c.id === convId) ?? null;
+      setConv(c);
+      setMessages(msgs);
+    } catch {}
+  }, [convId]);
+
+  useEffect(() => {
+    loadData().finally(() => setLoading(false));
+    pollRef.current = setInterval(loadData, 3000);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [loadData]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const handleSend = async () => {
+    if (!text.trim() || sending) return;
+    setSending(true);
+    try {
+      const msg = await sendMessage(convId, { type: "text", content: text });
+      setMessages((prev) => [...prev, msg]);
+      setText("");
+    } catch {
+      toast.error("Failed to send message");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      chunksRef.current = [];
+      mr.ondataavailable = (e) => chunksRef.current.push(e.data);
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const base64 = (reader.result as string).split(",")[1];
+          try {
+            const msg = await sendMessage(convId, {
+              type: "voice",
+              audioData: base64,
+            });
+            setMessages((prev) => [...prev, msg]);
+          } catch {
+            toast.error("Failed to send voice message");
+          }
+        };
+        reader.readAsDataURL(blob);
+        setRecordingSeconds(0);
+      };
+      mr.start();
+      mediaRecorderRef.current = mr;
+      setIsRecording(true);
+      timerRef.current = setInterval(
+        () => setRecordingSeconds((s) => s + 1),
+        1000,
+      );
+    } catch {
+      toast.error("Microphone permission denied");
+    }
+  };
+
+  const stopRecording = () => {
+    mediaRecorderRef.current?.stop();
+    if (timerRef.current) clearInterval(timerRef.current);
+    setIsRecording(false);
+  };
+
+  const roomId = `gopal-conv-${convId}`;
+
+  return (
+    <div className="flex flex-col h-screen bg-background">
+      {callMode && (
+        <CallOverlay
+          roomId={roomId}
+          userId={user?.id ?? ""}
+          userName={user?.fullName ?? "User"}
+          mode={callMode}
+          onEnd={() => setCallMode(null)}
+        />
+      )}
+
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-background/90 backdrop-blur-xl sticky top-0 z-20">
+        <Link href="/messages">
+          <Button variant="ghost" size="icon" className="rounded-full shrink-0">
+            <ArrowLeft className="w-5 h-5" />
+          </Button>
+        </Link>
+
+        {loading ? (
+          <div className="flex items-center gap-3 flex-1">
+            <Skeleton className="w-10 h-10 rounded-full" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            <Avatar className="w-10 h-10 border border-border">
+              <AvatarImage src={conv?.otherUser?.avatarUrl || undefined} />
+              <AvatarFallback className="bg-primary/10 text-primary">
+                {conv?.otherUser?.displayName?.[0] || "U"}
+              </AvatarFallback>
+            </Avatar>
+            <div className="min-w-0">
+              <p className="font-semibold text-sm text-foreground truncate">
+                {conv?.otherUser?.displayName || "Chat"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                @{conv?.otherUser?.username}
+              </p>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-1 shrink-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="rounded-full text-primary hover:bg-primary/10"
+            onClick={() => setCallMode("audio")}
+          >
+            <Phone className="w-5 h-5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="rounded-full text-primary hover:bg-primary/10"
+            onClick={() => setCallMode("video")}
+          >
+            <Video className="w-5 h-5" />
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+        {loading ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className={`flex ${i % 2 === 0 ? "justify-end" : ""}`}>
+                <Skeleton className="h-10 w-48 rounded-2xl" />
+              </div>
+            ))}
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full py-16 text-center">
+            <p className="text-muted-foreground text-sm">
+              Say hi to {conv?.otherUser?.displayName}! 👋
+            </p>
+          </div>
+        ) : (
+          <AnimatePresence initial={false}>
+            {messages.map((msg) => {
+              const isMe = msg.senderId === user?.id;
+              return (
+                <motion.div
+                  key={msg.id}
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  className={`flex ${isMe ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={cn(
+                      "max-w-[75%] px-4 py-2.5 rounded-2xl text-sm shadow-sm",
+                      isMe
+                        ? "rounded-br-sm text-white"
+                        : "rounded-bl-sm bg-muted text-foreground",
+                    )}
+                    style={
+                      isMe
+                        ? { background: "linear-gradient(135deg, #833ab4, #e1306c)" }
+                        : {}
+                    }
+                  >
+                    {msg.type === "voice" && msg.audioData ? (
+                      <VoiceMessage audioData={msg.audioData} isMe={isMe} />
+                    ) : (
+                      <span className="leading-relaxed break-words">{msg.content}</span>
+                    )}
+                    <p className={cn("text-[10px] mt-1", isMe ? "text-white/60" : "text-muted-foreground")}>
+                      {formatDistanceToNow(new Date(msg.createdAt), { addSuffix: true })}
+                    </p>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </AnimatePresence>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      <div className="px-4 py-3 border-t border-border bg-background/90 backdrop-blur-xl">
+        {isRecording ? (
+          <div className="flex items-center gap-3">
+            <div className="flex-1 flex items-center gap-3 bg-destructive/10 border border-destructive/30 rounded-2xl px-4 py-3">
+              <div className="w-2 h-2 rounded-full bg-destructive animate-pulse" />
+              <span className="text-sm font-medium text-destructive">
+                Recording {recordingSeconds}s
+              </span>
+            </div>
+            <Button
+              size="icon"
+              variant="destructive"
+              className="rounded-full w-12 h-12 shadow-lg"
+              onClick={stopRecording}
+            >
+              <Square className="w-5 h-5 fill-current" />
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="rounded-full text-primary hover:bg-primary/10 shrink-0"
+              onClick={startRecording}
+            >
+              <Mic className="w-5 h-5" />
+            </Button>
+            <Input
+              placeholder="Message..."
+              className="rounded-2xl border-muted bg-muted/50 flex-1"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
+              disabled={sending}
+            />
+            <Button
+              size="icon"
+              className="rounded-full w-10 h-10 shrink-0 disabled:opacity-40"
+              style={{
+                background: text.trim()
+                  ? "linear-gradient(135deg,#833ab4,#e1306c)"
+                  : undefined,
+              }}
+              disabled={!text.trim() || sending}
+              onClick={handleSend}
+            >
+              {sending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function VoiceMessage({ audioData, isMe }: { audioData: string; isMe: boolean }) {
+  const [playing, setPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const togglePlay = () => {
+    if (!audioRef.current) {
+      audioRef.current = new Audio(`data:audio/webm;base64,${audioData}`);
+      audioRef.current.onended = () => setPlaying(false);
+    }
+    if (playing) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      setPlaying(false);
+    } else {
+      audioRef.current.play();
+      setPlaying(true);
+    }
+  };
+
+  return (
+    <button
+      onClick={togglePlay}
+      className={cn(
+        "flex items-center gap-2 py-1 rounded-lg transition-opacity hover:opacity-80",
+        isMe ? "text-white" : "text-foreground",
+      )}
+    >
+      <div className={cn("w-8 h-8 rounded-full flex items-center justify-center", isMe ? "bg-white/20" : "bg-primary/10")}>
+        {playing ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 fill-current opacity-80" />}
+      </div>
+      <div className="flex gap-0.5 items-center h-5">
+        {Array.from({ length: 12 }).map((_, i) => (
+          <div
+            key={i}
+            className={cn("w-0.5 rounded-full", isMe ? "bg-white/70" : "bg-primary/60")}
+            style={{ height: `${Math.random() * 14 + 4}px` }}
+          />
+        ))}
+      </div>
+      <span className="text-xs font-medium opacity-70">🎤</span>
+    </button>
+  );
+}
+
+export default function Chat({ params }: Props) {
+  const convId = parseInt(params.id, 10);
+  return (
+    <>
+      <Show when="signed-out">
+        <Redirect to="/" />
+      </Show>
+      <Show when="signed-in">
+        <ChatContent convId={convId} />
+      </Show>
+    </>
+  );
+}
+
+
+// ================================================================
+// FILE: src/pages/not-found.tsx
+// ================================================================
+import { Card, CardContent } from "@/components/ui/card";
+import { AlertCircle } from "lucide-react";
+
+export default function NotFound() {
+  return (
+    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50">
+      <Card className="w-full max-w-md mx-4">
+        <CardContent className="pt-6">
+          <div className="flex mb-4 gap-2">
+            <AlertCircle className="h-8 w-8 text-red-500" />
+            <h1 className="text-2xl font-bold text-gray-900">404 Page Not Found</h1>
+          </div>
+          <p className="mt-4 text-sm text-gray-600">
+            Did you forget to add the page to the router?
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
